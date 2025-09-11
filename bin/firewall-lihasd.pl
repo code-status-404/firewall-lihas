@@ -155,19 +155,20 @@ sub expand_dns {
   my $depth = $arg_ref->{depth};
   my %replacedns = %{$arg_ref->{replacedns}};
   my %replacehostcount = %{$arg_ref->{replacehostcount}};
-  my $outline;
+  my $outline = "";
 
   $line =~ s/-A (in|out|fwd|post|pre)/-A dns-$1/;
   if ( $line =~ m/([sd][ \t]+)dns-([a-zA-Z0-9_\.-]+)\b/ ) {
     my $name = $2;
     if ( not defined $replacedns{$name}{count} ) {
-      WARN "expand_dns: dns-$name unresolved";
+      WARN "expand_dns: dns-$name unresolved, skipping line $line";
+      return "";
     }
     foreach my $ip (values(@{$replacedns{$name}{ips}})) {
       my $thisline = $line;
       $thisline =~ s/([sd][ \t]+)dns-$name/$1$ip/;
       $outline .= expand_dns({line=>$thisline, replacehostcount=>\%replacehostcount, replacedns=>\%replacedns, depth=>$depth+1});
-    }
+		}
     return $outline;
   } else {
     return $line;
@@ -208,7 +209,9 @@ sub firewall_reload_dns {
   $iptcmd = "/usr/sbin/iptables-save |";
   open(my $fhiptsave, "$iptcmd") or die "Can't start $iptcmd: $!";
   foreach my $iptsaveline (<$fhiptsave>) {
-    if ( $iptsaveline =~ m/^\*([^ \t\n\r]*)/ ) {
+    if ( $iptsaveline =~ m/^.. dns-/ ) {
+			next;
+    } elsif ( $iptsaveline =~ m/^\*([^ \t\n\r]*)/ ) {
       $table=$1;
     } elsif ( $iptsaveline =~ m/^:([^ \t\n\r]*)/ ) {
       $allchains{$table}{$1} = 1;
@@ -218,6 +221,9 @@ sub firewall_reload_dns {
   		  if ( ! open($fh, "<", $heap->{datapath}."/$file")) { $logger->fatal("cannot open < ".$heap->{datapath}."/$file: $!"); exit 1};
   		  foreach my $line (<$fh>) {
   		    my $expandline = expand_dns({line=>$line, replacehostcount=>\%replacehostcount, replacedns=>\%replacedns, depth=>0});
+					if (not defined $expandline) {
+						WARN "unresolveable: line=>$line";
+					}
 					$ruleset .= $expandline;
   		  }
   		  close($fh);
