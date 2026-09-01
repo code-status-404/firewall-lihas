@@ -756,17 +756,17 @@ sub fw_privclients {
 		  					$outline .= " --icmp-type $dport";
 		  				} else {
 		  					$outline .= " --dport $dport";
-		  				}
-		  			}
-		  			if (defined($oiface)) {
-							if ($oiface =~ /^lo$/ ) {
+              }
+            }
+            if (defined($oiface)) {
+							if ( $oiface =~ /^lo$/ ) {
 								print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
 		  				} elsif ( defined($oiface) && $oiface !~ /^$/ ) {
 		  					print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -o $oiface -j ACCEPT\n";
-		  				} else {
-		  					print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
-		  				  print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
 							}
+		  			} else {
+		  				print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
+		  			  print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
 		  			}
 						if (defined($flags{'masquerade'} && $flags{'masquerade'} == 1)) {
 							print $FILEnat "-A post-$iface $outline -j MASQUERADE\n";
