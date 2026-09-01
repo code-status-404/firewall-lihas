@@ -25,9 +25,11 @@ darin finden die relevanten Dinge statt.
 
   - interface-NAME/privclients 
     Clients an diesem Interface bekommen die angegebenen Berechtigungen
-    Format: SRC-NET DST-NET PROTO PORT [OutIFACE]
-    Der Eintrag erfolgt in der Datei zu _dem_ Interface, dass die 
+    Format: SRC-NET DST-NET PROTO PORT [OutIFACE] [--flags=(masquerade)]
+    Der Eintrag erfolgt in der Datei zu _dem_ Interface, das die 
     verbindingsaufbauenden Pakete _eingehend_ sieht.
+    - --flags: Esxtraoptionen:
+        - masquerade: Diese Verbindung wird maskiert mit der IP der Firewall, unabhängig und vor der Funktion von `interface-*/masquerade`, `interface-*/snat`, `interface-*/nonat`
 
   - interface-NAME/reject 
     Analog privclients, werden aber mit REJECT abgewiesen bevor die privclients
