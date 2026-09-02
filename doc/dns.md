@@ -49,6 +49,20 @@ Ein Firewall-Reload erfolgt nur, wenn sich die IP-Menge tatsächlich ändert. De
 erzeugte Regelsatz wird vor dem Einspielen mit `iptables-restore --test`
 validiert. Fehler lassen den aktiven Regelsatz unverändert.
 
+Als IP-Menge gelten die unterschiedlichen IPv4-Adressen eines DNS-Namens; ihre
+Reihenfolge ist ohne Bedeutung. Liefert eine erneute Abfrage beispielsweise
+wieder `192.0.2.10` und `192.0.2.11`, werden nur deren Ablaufzeiten in der
+Datenbank verlängert. Die bestehenden Firewall-Regeln sind weiterhin korrekt,
+weshalb kein Reload erforderlich ist.
+
+Ändert sich die Antwort dagegen von `192.0.2.10, 192.0.2.11` auf
+`192.0.2.11, 192.0.2.12`, wurde eine Adresse entfernt und eine hinzugefügt. Der
+Daemon erzeugt deshalb die DNS-abhängigen Regeln neu. Zuerst prüft
+`iptables-restore --test` den vollständigen Regelsatz, ohne ihn zu aktivieren.
+Nur nach erfolgreicher Prüfung wird derselbe Regelsatz mit `iptables-restore`
+eingespielt. Schlägt die Prüfung oder das Einspielen fehl, bleibt der bisherige
+Regelsatz aktiv und der Daemon versucht den Reload später erneut.
+
 ## Parameter
 
 | Attribut | Bedeutung | Vorgabe |
