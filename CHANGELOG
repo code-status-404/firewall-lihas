@@ -1,3 +1,39 @@
+Mi 2. Sep 2026
+- DNS-Namen werden primaer aus den generierten dns-{raw,filter,mangle,nat}-Dateien
+  ermittelt. Dadurch funktioniert dns-HOSTNAME auch direkt in privclients,
+  reject, nolog und deren Includes; hostgroup-* bleibt als kompatible Quelle
+  erhalten.
+- Explizite <dns><host name="..."/></dns>-Eintraege und dns/@active aus der
+  config.xml werden nun ausgewertet.
+- CNAME-Ketten werden bis zu ihren finalen IPv4-A-Records verfolgt. In die
+  Datenbank gelangen nur validierte IPv4-Adressen. Fuer die Gueltigkeitsdauer
+  gilt die kleinste TTL der CNAME-Kette und des A-Records; TTL 0 wird auf
+  ttl_minimum begrenzt und nicht mehr mit einem entfernten Record verwechselt.
+- Temporaere Resolverfehler verwenden den letzten erfolgreichen Stand nur bis
+  max_stale weiter und werden mit begrenztem Backoff erneut versucht. NXDOMAIN
+  und erfolgreiche Antworten ohne A-Record entfernen den bisherigen Stand.
+- DNS-Aenderungen werden je Host in einer SQLite-Transaktion geschrieben. So
+  sieht der Firewall-Reload nie eine nur teilweise aktualisierte IP-Menge.
+- SQL-Migration: Vor dem Anlegen der Unique-Indizes werden vorhandene Duplikate
+  in hostnames sowie hostnames_current entfernt. Pro hostname beziehungsweise
+  hostname/IP-Kombination bleibt der Datensatz mit der hoechsten rowid erhalten,
+  also die zuletzt eingefuegte Auspraegung. Diese einmalige Bereinigung ist
+  erforderlich, weil SQLite einen Unique-Index bei vorhandenen Duplikaten nicht
+  anlegen kann.
+- SQL-Indizes: hostnames(hostname) und hostnames_current(hostname, ip) sind nun
+  eindeutig. Dies verhindert neue doppelte DNS-Zustaende auch bei mehrfachen
+  Konfigurationsquellen. Ein zusaetzlicher Index auf
+  hostnames_current(time_valid_till) beschleunigt die regelmaessige Suche nach
+  bald ablaufenden Records. IPv4- und IPv6-Schema werden bewusst identisch
+  migriert, damit beide Datenbanken konsistent bleiben.
+- Ein Firewall-Reload wird nur bei einer geaenderten IP-Menge ausgeloest. Der
+  vollstaendige Regelsatz wird vor dem Einspielen mit iptables-restore --test
+  validiert; fehlgeschlagene Reloads werden erneut versucht.
+- Die DNS-Kernlogik ist ohne POE-Abhaengigkeit testbar. Tests decken direkte
+  A-Records, privclients-Regelerkennung, CNAME-Folgeabfragen, Ketten-TTL,
+  TTL 0, IPv4-Filterung und CNAME-Schleifen ab.
+- Ausfuehrliche Betriebs- und Konfigurationshinweise stehen in doc/dns.md.
+
 Do 25. Apr 10:55:49 CEST 2013, are
 - reads /etc/default/firewall
 - firwall-lihasd.pl: added, needs some perl libraries to run
