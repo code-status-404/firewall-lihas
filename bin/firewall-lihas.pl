@@ -723,8 +723,20 @@ sub fw_privclients {
 		  foreach my $line1 (split(/\n/,expand_hostgroup({dbh=>$dbh, line=>$line}))) {
 		  	foreach my $line2 (split(/\n/,expand_portgroup({dbh=>$dbh, line=>$line1}))) {
 					foreach my $line3 (split(/\n/,expand_ifacegroup({dbh=>$dbh, line=>$line2}))) {
+						# FEATURE: flags
+						my %flags;
+						if ($line3 =~ /--flags=(.*)/) {
+							my $flagline = $1;
+							$flagline =~ s/--flags=//;
+							foreach my $flag (split(/;/, $flagline)) {
+								if ($flag =~ /^masquerade$/) {
+									$flags{'masquerade'}=1;
+								}
+							}
+						}
+						$line3 =~ s/--flags=(.*)//;
 		  			my ($snet, $dnet, $proto, $dport, $oiface) = split(/[\s]+/, $line3);
-		  			$outline = "$CONNSTATE NEW";
+		  			$outline = "";
 						if ( $do_comment ) {
 							$outline .= " -m comment --comment \"$commentchain\"";
 						}
@@ -744,16 +756,21 @@ sub fw_privclients {
 		  					$outline .= " --icmp-type $dport";
 		  				} else {
 		  					$outline .= " --dport $dport";
-		  				}
-		  			}
-		  			if ( defined($oiface) && $oiface =~ /^lo$/ ) {
-		  				print $FILEfilter "-A in-$iface $outline -j ACCEPT\n";
-		  			} elsif ( defined($oiface) && $oiface !~ /^$/ ) {
-		  				print $FILEfilter "-A fwd-$iface $outline -o $oiface -j ACCEPT\n";
+              }
+            }
+            if (defined($oiface)) {
+							if ( $oiface =~ /^lo$/ ) {
+								print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
+		  				} elsif ( defined($oiface) && $oiface !~ /^$/ ) {
+		  					print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -o $oiface -j ACCEPT\n";
+							}
 		  			} else {
-		  				print $FILEfilter "-A fwd-$iface $outline -j ACCEPT\n";
-		  			  print $FILEfilter "-A in-$iface $outline -j ACCEPT\n";
+		  				print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
+		  			  print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
 		  			}
+						if (defined($flags{'masquerade'} && $flags{'masquerade'} == 1)) {
+							print $FILEnat "-A post-$iface $outline -j MASQUERADE\n";
+						}
 		  		}
 				}
 		  }
@@ -1054,6 +1071,18 @@ if ($fw_privclients) {
 		}
 		fw_mark($dbh, $iface, "$configpath/$interfacedir/mark", $commentchain);
 	}
+	print "Adding privileged Clients\n";
+	foreach my $iface (keys(%{$ifaces{logical}})) {
+		my $interfacedir="interface-$iface";
+		-s "$configpath/$interfacedir/privclients" || next;
+		$commentchain=firewall_comment_add_key($dbh,"$interfacedir/privclients");
+		my $iface = $interfacedir;
+		$iface =~ s/^interface-//;
+		foreach my $line (values(@{$comment{$iface}})) {
+			print "  ".$line;
+		}
+		fw_privclients($dbh, $iface, "$configpath/$interfacedir/privclients", $commentchain);
+	}
 	print "Avoiding NAT\n";
 	foreach my $iface (keys(%{$ifaces{logical}})) {
 		my $interfacedir="interface-$iface";
@@ -1113,18 +1142,6 @@ if ($fw_privclients) {
 			print "  ".$line;
 		}
 		fw_rejectclients($dbh, $iface, "$configpath/$interfacedir/reject", $commentchain);
-	}
-	print "Adding privileged Clients\n";
-	foreach my $iface (keys(%{$ifaces{logical}})) {
-		my $interfacedir="interface-$iface";
-		-s "$configpath/$interfacedir/privclients" || next;
-		$commentchain=firewall_comment_add_key($dbh,"$interfacedir/privclients");
-		my $iface = $interfacedir;
-		$iface =~ s/^interface-//;
-		foreach my $line (values(@{$comment{$iface}})) {
-			print "  ".$line;
-		}
-		fw_privclients($dbh, $iface, "$configpath/$interfacedir/privclients", $commentchain);
 	}
 	print "Disabling specific dropped connnection logs\n";
 	foreach my $iface (keys(%{$ifaces{logical}})) {
