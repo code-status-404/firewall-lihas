@@ -94,7 +94,9 @@ if ( not defined($rv) ) {
 use HTTP::Status qw(:constants);
 use LiHAS::Firewall::Ping;
 use LiHAS::Firewall::DNS;
+use LiHAS::Firewall::DNSUtil qw(_normalise_name dns_names_from_rule_line);
 use URI::Escape qw(uri_escape);
+use Fcntl qw(:flock);
 my %feature;
 use DBI;
 
@@ -186,6 +188,12 @@ sub firewall_reload_dns {
   my ($dh, $fh);
   my $logger = Log::Log4perl->get_logger('firewalld.reload.dns');
   if (! Log::Log4perl::initialized()) { $logger->warn("uninit"); }
+  return if not $heap->{dns_active};
+
+  open(my $lock, '>>', $heap->{datapath}.'/dns-reload.lock')
+    or do { $logger->error("cannot open DNS reload lock: $!"); $kernel->delay('firewall_reload_dns', 30); return; };
+  flock($lock, LOCK_EX)
+    or do { $logger->error("cannot lock DNS reload: $!"); $kernel->delay('firewall_reload_dns', 30); return; };
 
   my $iptcmd="";
 
@@ -205,9 +213,9 @@ sub firewall_reload_dns {
 	my @dnsfiles = grep { /^dns-/ && -f $heap->{datapath}."/$_" } readdir($dh);
   closedir $dh;
   my %allchains;
-	my $ruleset;
-  $iptcmd = "/usr/sbin/iptables-save |";
-  open(my $fhiptsave, "$iptcmd") or die "Can't start $iptcmd: $!";
+	my $ruleset = "";
+  open(my $fhiptsave, '-|', '/usr/sbin/iptables-save')
+    or do { $logger->error("cannot start iptables-save: $!"); $kernel->delay('firewall_reload_dns', 30); return; };
   foreach my $iptsaveline (<$fhiptsave>) {
     if ( $iptsaveline =~ m/^.. dns-/ ) {
 			next;
@@ -231,54 +239,112 @@ sub firewall_reload_dns {
     }
 		$ruleset .= $iptsaveline;
   }
-  close($fhiptsave);
+  if (!close($fhiptsave)) {
+    $logger->error("iptables-save failed: $?");
+    $kernel->delay('firewall_reload_dns', 30);
+    return;
+  }
 	DEBUG "/usr/sbin/iptables-restore start";
-  $iptcmd="| /usr/sbin/iptables-restore";
-  open(my $fhiptrestore, "$iptcmd") or die "Can't start $iptcmd: $!";
+  open(my $fhipttest, '|-', '/usr/sbin/iptables-restore', '--test')
+    or do { $logger->error("cannot test DNS ruleset: $!"); $kernel->delay('firewall_reload_dns', 30); return; };
+	print $fhipttest $ruleset;
+  if (!close($fhipttest)) {
+    $logger->error("DNS ruleset validation failed; active firewall was not changed");
+    $kernel->delay('firewall_reload_dns', 30);
+    return;
+  }
+  open(my $fhiptrestore, '|-', '/usr/sbin/iptables-restore')
+    or do { $logger->error("cannot start iptables-restore: $!"); $kernel->delay('firewall_reload_dns', 30); return; };
 	print $fhiptrestore $ruleset;
-	close($fhiptrestore);
+  if (!close($fhiptrestore)) {
+    $logger->error("iptables-restore failed: $?");
+    $kernel->delay('firewall_reload_dns', 30);
+    return;
+  }
+	$heap->{dns_reload_pending} = 0;
 	DEBUG "/usr/sbin/iptables-restore end";
 }
 
 =head2 firewall_find_dnsnames
-checks the firewall config groups/hostname-* for dns-names and adds them to the list of names to be checked
+
+Collects names from generated dns-* rules, hostgroups and explicit config.xml
+entries.  Reading the generated rules is what permits dns-* directly in
+privclients and other supported rule sources.
+
 =cut
 sub firewall_find_dnsnames {
   my ($kernel, $session, $heap) = @_[KERNEL, SESSION, HEAP];
-  my $line;
-  my $fh;
-  my $hostname;
-  my $sql = "DELETE FROM hostnames";
-  my $sth = $heap->{dbh}->prepare("$sql");
-  $sth->execute();
-  $sql = "INSERT INTO hostnames (hostname) VALUES (?)";
-  $sth = $heap->{dbh}->prepare("$sql");
-  opendir(my $dh, $cfg->find('config/@path')."/groups") || die "can't opendir ".$cfg->find('config/@path')."/groups: $!\n";
-  my @files = grep { /^hostgroup-/ && -f $cfg->find('config/@path')."/groups/$_" } readdir($dh);
-  closedir $dh;
-  if ( -r $heap->{datapath}."/hostgroup-feature-ipsec" ) {
-    push(@files, $heap->{datapath}."/hostgroup-feature-ipsec");
-  }
-  foreach my $file (@files) {
-    open($fh, "<", $cfg->find('config/@path')."/groups/$file") or die "cannot open < ".$cfg->find('config/@path')."/groups/$file: $!";
-    foreach $line (<$fh>) {
-      $line =~ m/dns-/ || next;
-      $line =~ s/^dns-//;
-      chop $line;
-      $sth->execute($line);
-      # $kernel->yield("dns_query", 'A', $line);
+  return if not $heap->{dns_active};
+  my %names;
+
+  # Generated dns-* files are the authoritative source.  They also contain
+  # names used directly in privclients, nolog, reject and included files.
+  if (opendir(my $dh, $heap->{datapath})) {
+    my @files = grep { /^dns-(?:raw|filter|mangle|nat)$/ && -f $heap->{datapath}."/$_" } readdir($dh);
+    closedir($dh);
+    foreach my $file (@files) {
+      open(my $fh, '<', $heap->{datapath}."/$file") or do { WARN "cannot read $file: $!"; next; };
+      while (my $line = <$fh>) {
+        $names{$_} = 1 foreach dns_names_from_rule_line($line);
+      }
+      close($fh);
     }
-    close($fh);
+  } else {
+    WARN "cannot scan $heap->{datapath} for DNS rules: $!";
   }
-  $sql = "DELETE FROM hostnames_current WHERE hostnames_current.hostname NOT IN (SELECT hostname FROM hostnames)";
-  $sth = $heap->{dbh}->prepare("$sql");
+
+  # Keep hostgroups as a compatibility source, including names not currently
+  # referenced by a generated rule.
+  my $groups = $heap->{configpath}."/groups";
+  if (opendir(my $dh, $groups)) {
+    my @files = grep { /^hostgroup-/ && -f "$groups/$_" } readdir($dh);
+    closedir($dh);
+    foreach my $file (@files) {
+      open(my $fh, '<', "$groups/$file") or do { WARN "cannot read $groups/$file: $!"; next; };
+      while (my $line = <$fh>) {
+        $line =~ s/#.*$//;
+        chomp($line);
+        next if $line !~ /^\s*dns-([^\s]+)\s*$/;
+        my $name = _normalise_name($1);
+        $names{$name} = 1 if defined $name;
+      }
+      close($fh);
+    }
+  }
+
+  # Explicit config entries are useful for pre-warming or external consumers.
+  eval {
+    my $xml = XML::XPath->new(filename => '/etc/firewall.lihas.d/config.xml');
+    foreach my $node ($xml->findnodes('/applicationconfig/application/dns/host/@name')) {
+      my $name = _normalise_name($node->getNodeValue());
+      $names{$name} = 1 if defined $name;
+    }
+  };
+  WARN "cannot read explicit DNS hosts from config.xml: $@" if $@;
+
+  my $dbh = $heap->{dbh};
+  my $changed = 0;
+  eval {
+    $dbh->begin_work;
+    $dbh->do('DELETE FROM hostnames');
+    my $insert = $dbh->prepare('INSERT OR IGNORE INTO hostnames (hostname) VALUES (?)');
+    $insert->execute($_) foreach sort keys %names;
+    my $delete = $dbh->prepare('DELETE FROM hostnames_current WHERE hostname NOT IN (SELECT hostname FROM hostnames)');
+    $delete->execute();
+    $changed = $delete->rows > 0;
+    $dbh->commit;
+    1;
+  } or do {
+    my $error = $@ || 'unknown database error';
+    eval { $dbh->rollback };
+    ERROR "cannot update configured DNS names: $error";
+  };
+  LiHAS::Firewall::DNS::_schedule_reload($kernel, $heap) if $changed;
+
+  my $sth = $dbh->prepare('SELECT hostname FROM hostnames WHERE hostname NOT IN (SELECT hostname FROM hostnames_current)');
   $sth->execute();
-  $sql = "SELECT hostnames.hostname FROM hostnames WHERE hostname NOT IN (SELECT hostname FROM hostnames_current)";
-  $sth = $heap->{dbh}->prepare("$sql");
-  $sth->execute();
-  $sth->bind_columns(\$hostname);
-  while ( $sth->fetch ) {
-    $kernel->yield("dns_query", 'A', $hostname);
+  while (my ($hostname) = $sth->fetchrow_array()) {
+    $kernel->yield('dns_query', 'A', $hostname);
   }
   $kernel->delay('firewall_find_dnsnames', $heap->{refresh_dns_config});
 }
@@ -346,7 +412,10 @@ session_start
 =cut
 sub session_start {
   my ($kernel, $heap) = @_[KERNEL, HEAP];
-  $heap->{dbh} = DBI->connect($cfg->find('database/dbd/@connectorstring'));
+  $heap->{dbh} = DBI->connect(
+    $cfg->find('database/dbd/@connectorstring'), undef, undef,
+    { RaiseError => 1, PrintError => 0, AutoCommit => 1 }
+  );
   $heap->{datapath} = $cfg->find('config/@db_dbd');
   $heap->{configpath} = $cfg->find('config/@path');
   $heap->{portalname} = $cfg->find('/applicationconfig/application/feature/portal/name');
@@ -365,15 +434,20 @@ sub session_start {
 
   $heap->{refresh_dns_config} = $cfg->find('dns/@refresh_dns_config');
   $heap->{refresh_dns_minimum} = $cfg->find('dns/@refresh_dns_minimum');
+  $heap->{dns_active} = $cfg->find('dns/@active') !~ /^(?:|0)$/;
+  $heap->{dns_ttl_minimum} = $cfg->find('dns/@ttl_minimum') || 5;
+  $heap->{dns_max_stale} = $cfg->find('dns/@max_stale') || 3600;
+  $heap->{dns_retry_maximum} = $cfg->find('dns/@retry_maximum') || 300;
+  $heap->{dns_cname_max_depth} = $cfg->find('dns/@cname_max_depth') || 8;
   $heap->{feature_portal} = $cfg->find('feature/portal/@enabled');
   $kernel->yield('timer_ping');
-  $kernel->yield('firewall_find_dnsnames');
+  $kernel->yield('firewall_find_dnsnames') if $heap->{dns_active};
   if ($feature{'portal'}!=0) {
     $kernel->yield('portal_init');
     $kernel->yield('portal_ipset_init');
   }
-  $kernel->yield('dns_update');
-  $kernel->yield('firewall_reload_dns');
+  $kernel->yield('dns_update') if $heap->{dns_active};
+  $kernel->yield('firewall_reload_dns') if $heap->{dns_active};
   manage_server();
   return 0;
 }

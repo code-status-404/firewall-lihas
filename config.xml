@@ -11,6 +11,11 @@
       <table name="hostnames_current">CREATE TABLE IF NOT EXISTS hostnames_current ( hostname TEXT NOT NULL, time_first INTEGER NOT NULL, time_valid_till INTEGER NOT NULL, ip TEXT NOT NULL );</table>
       <table name="vars_num"  >CREATE TABLE IF NOT EXISTS vars_num ( name TEXT NOT NULL, value INTEGER );</table>
       <index name="activedns" >CREATE INDEX IF NOT EXISTS activedns ON dnshistory (active, hostname);</index>
+      <migration name="dns_deduplicate_hosts">DELETE FROM hostnames WHERE rowid NOT IN (SELECT MAX(rowid) FROM hostnames GROUP BY hostname);</migration>
+      <migration name="dns_deduplicate_current">DELETE FROM hostnames_current WHERE rowid NOT IN (SELECT MAX(rowid) FROM hostnames_current GROUP BY hostname, ip);</migration>
+      <index name="hostnames_unique">CREATE UNIQUE INDEX IF NOT EXISTS hostnames_unique ON hostnames (hostname);</index>
+      <index name="hostnames_current_unique">CREATE UNIQUE INDEX IF NOT EXISTS hostnames_current_unique ON hostnames_current (hostname, ip);</index>
+      <index name="hostnames_current_expiry">CREATE INDEX IF NOT EXISTS hostnames_current_expiry ON hostnames_current (time_valid_till);</index>
       <table name="portal_clients">CREATE TABLE IF NOT EXISTS portal_clients ( id INTEGER PRIMARY KEY, portalname TEXT NOT NULL, ip TEXT NOT NULL, mac INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, active INTEGER, userid INTEGER);</table>
       <table name="portal_clienthistory">CREATE TABLE IF NOT EXISTS portal_clienthistory ( portalname TEXT NOT NULL, ip TEXT NOT NULL, mac INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL);</table>
       <table name="portal_users">CREATE TABLE IF NOT EXISTS portal_users ( id INTEGER PRIMARY KEY, name TEXT NOT NULL, pass TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, max_duration TEXT, max_clients TEXT, start_use TEXT);</table>
@@ -26,6 +31,11 @@
       <table name="hostnames_current">CREATE TABLE IF NOT EXISTS hostnames_current ( hostname TEXT NOT NULL, time_first INTEGER NOT NULL, time_valid_till INTEGER NOT NULL, ip TEXT NOT NULL );</table>
       <table name="vars_num"  >CREATE TABLE IF NOT EXISTS vars_num ( name TEXT NOT NULL, value INTEGER );</table>
       <index name="activedns" >CREATE INDEX IF NOT EXISTS activedns ON dnshistory (active, hostname);</index>
+      <migration name="dns_deduplicate_hosts">DELETE FROM hostnames WHERE rowid NOT IN (SELECT MAX(rowid) FROM hostnames GROUP BY hostname);</migration>
+      <migration name="dns_deduplicate_current">DELETE FROM hostnames_current WHERE rowid NOT IN (SELECT MAX(rowid) FROM hostnames_current GROUP BY hostname, ip);</migration>
+      <index name="hostnames_unique">CREATE UNIQUE INDEX IF NOT EXISTS hostnames_unique ON hostnames (hostname);</index>
+      <index name="hostnames_current_unique">CREATE UNIQUE INDEX IF NOT EXISTS hostnames_current_unique ON hostnames_current (hostname, ip);</index>
+      <index name="hostnames_current_expiry">CREATE INDEX IF NOT EXISTS hostnames_current_expiry ON hostnames_current (time_valid_till);</index>
       <table name="portal_clients">CREATE TABLE IF NOT EXISTS portal_clients ( id INTEGER PRIMARY KEY, portalname TEXT NOT NULL, ip TEXT NOT NULL, mac INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, active INTEGER, userid INTEGER);</table>
       <table name="portal_clienthistory">CREATE TABLE IF NOT EXISTS portal_clienthistory ( portalname TEXT NOT NULL, ip TEXT NOT NULL, mac INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL);</table>
       <table name="portal_users">CREATE TABLE IF NOT EXISTS portal_users ( id INTEGER PRIMARY KEY, name TEXT NOT NULL, pass TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, max_duration TEXT, max_clients TEXT, start_use TEXT);</table>
@@ -75,7 +85,8 @@
     </policy>
     -->
   </policies>
-  <dns active="1" refresh_dns_minimum="30" refresh_dns_config="300">
+  <dns active="1" refresh_dns_minimum="30" refresh_dns_config="300"
+       ttl_minimum="5" max_stale="3600" retry_maximum="300" cname_max_depth="8">
     <host name="lihas.de"/>
   </dns>
   <tests count="0" active="0">

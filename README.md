@@ -28,6 +28,7 @@ darin finden die relevanten Dinge statt.
     Format: SRC-NET DST-NET PROTO PORT [OutIFACE]
     Der Eintrag erfolgt in der Datei zu _dem_ Interface, dass die 
     verbindingsaufbauenden Pakete _eingehend_ sieht.
+    `dns-HOSTNAME` kann direkt als Quelle oder Ziel verwendet werden.
 
   - interface-NAME/reject 
     Analog privclients, werden aber mit REJECT abgewiesen bevor die privclients
@@ -116,8 +117,10 @@ darin finden die relevanten Dinge statt.
 
 - DNS-Aufloesung, dns-* Namen
   - Hierfür muss firewall-lihasd.pl laufen, wird bei passend installierten Abhängigkeiten automatisch gestartet.
-  - Alle dns-* Statements werden aus groups/hostgroup-* genommen und, falls die TTL abgelaufen ist, neu aufgeloest.
-  - andere Dateien werden nicht ausgewertet, hostgroup ist hier Pflicht.
+  - DNS-Statements werden aus den erzeugten dns-Regeldateien sowie kompatibel
+    aus groups/hostgroup-* genommen und vor Ablauf ihrer TTL neu aufgeloest.
+  - CNAME-Ketten werden bis zu IPv4-A-Records verfolgt.
+  - Details zu Quellen, Fehlerverhalten und Konfiguration: doc/dns.md
 
 - ipset Support
   - Konfiguration in config.xml
@@ -152,4 +155,3 @@ SNAT und Masquerading werden am ausgehenden Interface konfiguriert.
 Externe Programme:
 firewall-lihasd.pl - DNS in der Firewallkonfiguration mitsamt Updates
 firewall-lihas-watchdog-cron.sh - prueft ob die alternative Routingtabellen aktuell sind und startete ggf. die Firewall neu
-
