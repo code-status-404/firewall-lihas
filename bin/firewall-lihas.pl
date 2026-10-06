@@ -246,8 +246,8 @@ sub parse_portgroup {
     foreach my $line (<$fh>) {
       chop $line;
       $line =~ m/^#/ && next;
-      $line =~ m/^[ \t]*$/ && next;
-      if ( $line =~ m/^(any|tcp|udp|icmp)[ \t]+portgroup-([^ ]*)(|[ \t])*(#.*|)$/ ) {
+      $line =~ m/^\s*$/ && next;
+      if ( $line =~ m/^(any|tcp|udp|icmp)\s+portgroup-([^\s]+)/ ) {
         my $tmpproto = $1;
         my $tmpgrp = $2;
         if (!defined $portgroup{$tmpgrp}{defined}) {
@@ -259,7 +259,7 @@ sub parse_portgroup {
             push(@{$portgroup{$name}{proto}{$proto}{ports}}, $port);
           }
         }
-      } elsif ( $line =~ m/^([a-zA-Z0-9]+)[ \t]+([0-9:]+)/){
+      } elsif ( $line =~ m/^([a-zA-Z0-9]+)\s+([0-9:]+)/){
         my $proto = $1;
         my $port = $2;
         push(@{$portgroup{$name}{proto}{$proto}{ports}}, $port);
@@ -286,7 +286,7 @@ sub expand_portgroup {
   my $replaceline='';
   my $resultline='';
   my $name = $line;
-  if ( $line =~ m/^(.*)[ \t]+(any|tcp|udp|icmp)[ \t]+portgroup-([a-zA-Z0-9_\.-]+)\b(.*)$/ ) {
+  if ( $line =~ m/^(.*)\s+(any|tcp|udp|icmp)\s+portgroup-([a-zA-Z0-9_\.-]+)(.*)$/ ) {
     my $base = $1;
     my $proto = $2;
     my $name = $3;
@@ -722,9 +722,9 @@ sub fw_privclients {
   open(my $privclients, "<", $file) or die "cannot open < $file: $!";
   foreach my $line (<$privclients>) {
     $line =~ m/^#/ && next;
-    $line =~ m/^[ \t]*$/ && next;
     $line =~ s/#.*//;
-  	$line = expand_iface_placeholder($line, $iface);
+    $line =~ m/^\s*$/ && next;
+    $line = expand_iface_placeholder($line, $iface);
 	if ($line =~ /^include[\s]+([^\s]+)/) {
       $commentchain .= " " . firewall_comment_add_key($dbh,"$1");
       fw_privclients($dbh, $iface, "$configpath/$1", $commentchain);
@@ -732,29 +732,29 @@ sub fw_privclients {
       foreach my $line1 (split(/\n/,expand_hostgroup({dbh=>$dbh, line=>$line}))) {
         foreach my $line2 (split(/\n/,expand_portgroup({dbh=>$dbh, line=>$line1}))) {
           foreach my $line3 (split(/\n/,expand_ifacegroup({dbh=>$dbh, line=>$line2}))) {
+						$line3 =~ s/\s+#.*//;
             # FEATURE: flags
             my %flags;
-            if ($line3 =~ /--flags=(.*)/) {
+            if ($line3 =~ /\s+--flags=([^\s]+)/) {
               my $flagline = $1;
-              $flagline =~ s/--flags=//;
               foreach my $flag (split(/;/, $flagline)) {
                 if ($flag =~ /^masquerade$/) {
                   $flags{'masquerade'}=1;
                 }
               }
             }
-            $line3 =~ s/--flags=(.*)//;
+            $line3 =~ s/\s+--flags=([^\s]+)//;
             my ($snet, $dnet, $proto, $dport, $oiface) = split(/[\s]+/, $line3);
             $outline = "";
             if ( $do_comment ) {
               $outline .= " -m comment --comment \"$commentchain\"";
             }
-            if ( $snet =~ m/ipset-(.*)/ ) {
+            if ( $snet =~ m/^ipset-(.*)/ ) {
               $outline .= " -m set --match-set $1 src";
             } else {
               $outline .= " -s $snet";
             }
-            if ( $dnet =~ m/ipset-(.*)/ ) {
+            if ( $dnet =~ m/^ipset-(.*)/ ) {
               $outline .= " -m set --match-set $1 dst";
             } else {
               $outline .= " -d $dnet";
@@ -772,7 +772,10 @@ sub fw_privclients {
                 print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
               } elsif ( defined($oiface) && $oiface !~ /^$/ ) {
                 print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -o $oiface -j ACCEPT\n";
-              }
+              } else {
+                print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
+                print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
+							}
             } else {
               print $FILEfilter "-A fwd-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
               print $FILEfilter "-A in-$iface $CONNSTATE NEW $outline -j ACCEPT\n";
@@ -847,7 +850,7 @@ sub fw_policyrouting {
 =cut
 
 sub do_shaping {
-
+  
 }
 
 =head2 firewall_create_db
@@ -1224,7 +1227,7 @@ if ($fw_privclients) {
 } elsif ($expand_portgroups) {
   foreach my $line (<>) {
     $line =~ m/^#/ && next;
-    $line =~ m/^[ \t]*$/ && next;
+    $line =~ m/^\s*$/ && next;
     print expand_portgroup({dbh=>$dbh, line=>$line});
   }
 }
